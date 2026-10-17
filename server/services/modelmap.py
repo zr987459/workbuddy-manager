@@ -51,15 +51,23 @@ def fallback(mapping: object) -> str | None:
 def target_for(mapping: object, model: str | None) -> str | None:
     """下游传来的模型名 → 实际要调用的模型名。
 
-    顺序：**精确别名** → **兜底** → **原样返回**（没有兜底时保持旧行为）。
+    顺序：**精确别名** → **大小写忽略别名** → **兜底** → **无前缀自动匹配** → **原样返回**。
     """
     if not model:
         return model
     table = load(mapping)
-    exact = table.get(model)
-    if exact:
-        return exact
-    return table.get(FALLBACK_KEY) or model
+    if model in table:
+        return table[model]
+    m_lower = model.strip().lower()
+    for k, v in table.items():
+        if k.strip().lower() == m_lower:
+            return v
+    fb = table.get(FALLBACK_KEY)
+    if fb:
+        return fb
+    if not (m_lower.startswith('global:') or m_lower.startswith('cn:')):
+        return f"global:{m_lower}"
+    return model
 
 
 def validate(raw: object) -> dict[str, str]:

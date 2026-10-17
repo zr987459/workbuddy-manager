@@ -959,6 +959,7 @@ MAX_SSE_BUFFER = 1 << 20
 
 
 @router.post('/v1/messages')
+@router.post('/v1/v1/messages')
 async def messages(request: Request):
     """Anthropic Messages API。"""
     body, err = await gateway._read_json_body(request)

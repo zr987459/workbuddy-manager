@@ -144,8 +144,8 @@ def _account_http_client(auth: dict, *, lane: str = ''):
     # 多传一个空 lane 会把它们全打红，而语义上「默认车道」本来就不该有痕迹。
     extra = {'lane': lane} if lane else {}
     if proxy is None:
-        return config.http_client(config.TENCENT_TIMEOUT, connect=5, **extra)
-    return config.http_client(config.TENCENT_TIMEOUT, connect=5, proxy=proxy, **extra)
+        return config.http_client(config.TENCENT_TIMEOUT, connect=15, **extra)
+    return config.http_client(config.TENCENT_TIMEOUT, connect=15, proxy=proxy, **extra)
 
 
 def _login_net_hint(proxy_name: str, exc: Exception) -> str:

@@ -705,6 +705,7 @@ def key_usage(request: Request):
 # 其余条目（限定了版本的密钥看不到另一版本，免得挑出一个注定 403 的模型）。
 # 未限定版本的密钥（存量）照旧看到全部——它们本来就两版都能调。
 @router.get('/v1/models')
+@router.get('/v1/v1/models')
 async def list_models(request: Request):
     key, ip, err = _authorize(request, None, is_model_list=True)
     if err:
@@ -966,6 +967,7 @@ async def _chat(request: Request, upstream_path: str):
 
 
 @router.post('/v1/chat/completions')
+@router.post('/v1/v1/chat/completions')
 async def chat_v1(request: Request):
     return await _chat(request, '/v1/chat/completions')
 
