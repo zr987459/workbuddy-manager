@@ -1,155 +1,142 @@
-import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Brain, ChevronDown, Copy, Square, Trash2 } from 'lucide-react';
-import { api, ApiError } from '../../lib/api';
-import { copyText, haptic } from '../../lib/device';
-import { readChatStream } from '../../lib/sse';
-import type { ModelInfo } from '../../lib/types';
-import { Sheet } from '../../ui/Sheet';
-import { useToast } from '../../ui/Toast';
-import { PageHeader } from '../../ui/bits';
+import {useEffect, useRef, useState} from 'react';
+import {api} from '../../lib/api';
+import {copy, haptic} from '../../lib/device';
+import {useAsync} from '../../lib/hooks';
+import {streamChat} from '../../lib/sse';
+import type {ModelInfo} from '../../lib/types';
+import {ErrorBanner, Segmented, Sheet, useToast} from '../../ui/kit';
+import {IconBrain, IconChevron, IconCopy, IconSend, IconStop} from '../../ui/Icons';
 
 interface Msg {
-  role: 'user' | 'assistant';
-  content: string;
-  reasoning?: string;
-  meta?: { ttft?: number; total?: number; pt?: number; ct?: number; credit?: number };
-  error?: string;
+  id: number; role: 'user' | 'assistant'; content: string; reasoning?: string;
+  meta?: {ttft?: number; total?: number; pt?: number; ct?: number; credit?: number}; error?: string; thinkingMs?: number;
 }
-const STORE = 'wbm.chat.v1';
 
-function ThinkBlock({ text, live }: { text: string; live: boolean }) {
-  const [open, setOpen] = useState(false);
+const LS = 'wbm.chat';
+const load = (): {model: string; effort: string; msgs: Msg[]} => {
+  try { return {model: '', effort: '', msgs: [], ...JSON.parse(localStorage.getItem(LS) || '{}')}; } catch { return {model: '', effort: '', msgs: []}; }
+};
+
+export default function Chat() {
+  const saved = useRef(load()).current;
+  const models = useAsync(() => api.models().then((r) => r.models));
+  const [model, setModel] = useState(saved.model);
+  const [effort, setEffort] = useState(saved.effort);
+  const [msgs, setMsgs] = useState<Msg[]>(saved.msgs);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState(false);
+  const abort = useRef<AbortController | null>(null);
+  const end = useRef<HTMLDivElement>(null);
+  const toast = useToast();
+
+  useEffect(() => { if (!model && models.data?.length) setModel(models.data[0].id); }, [models.data, model]);
+  useEffect(() => { localStorage.setItem(LS, JSON.stringify({model, effort, msgs: msgs.slice(-40)})); }, [model, effort, msgs]);
+  useEffect(() => { end.current?.scrollIntoView({block: 'end'}); }, [msgs]);
+
+  const current: ModelInfo | undefined = models.data?.find((m) => m.id === model);
+  const efforts = current?.efforts || [];
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy || !model) return;
+    haptic();
+    const user: Msg = {id: Date.now(), role: 'user', content: text};
+    const bot: Msg = {id: Date.now() + 1, role: 'assistant', content: '', reasoning: ''};
+    const history = [...msgs, user];
+    setMsgs([...history, bot]); setInput(''); setBusy(true);
+    const ctl = new AbortController(); abort.current = ctl;
+    const t0 = performance.now(); let ttft: number | undefined; let thinkStart: number | undefined; let thinkEnd: number | undefined;
+    const patch = (f: (m: Msg) => Msg) => setMsgs((s) => s.map((m) => (m.id === bot.id ? f(m) : m)));
+    try {
+      await streamChat({
+        model, reasoning_effort: efforts.includes(effort) ? effort : '',
+        messages: history.filter((m) => !m.error).map((m) => ({role: m.role, content: m.content})),
+      }, (d) => {
+        if (d.reasoning) { thinkStart ??= performance.now(); ttft ??= performance.now() - t0; patch((m) => ({...m, reasoning: (m.reasoning || '') + d.reasoning})); }
+        if (d.content) {
+          ttft ??= performance.now() - t0;
+          if (thinkStart && !thinkEnd) thinkEnd = performance.now();
+          patch((m) => ({...m, content: m.content + d.content}));
+        }
+        if (d.usage) patch((m) => ({...m, meta: {...m.meta, pt: d.usage!.prompt_tokens, ct: d.usage!.completion_tokens, credit: d.usage!.credit}}));
+        if (d.done) patch((m) => ({...m, thinkingMs: thinkStart ? (thinkEnd ?? performance.now()) - thinkStart : undefined, meta: {...m.meta, ttft, total: performance.now() - t0}}));
+      }, ctl.signal);
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') patch((m) => ({...m, error: (e as Error).message}));
+      else patch((m) => ({...m, meta: {...m.meta, ttft, total: performance.now() - t0}, error: m.content ? undefined : '已停止'}));
+    } finally { setBusy(false); abort.current = null; }
+  };
+
   return (
-    <div className="mb-2 rounded-2xl bg-surface-2/70 text-sm">
-      <button className="flex w-full items-center gap-2 px-3 py-2 text-ink-2" onClick={() => setOpen(!open)}>
-        <Brain size={15} className={live ? 'animate-pulse text-primary' : ''} />
-        <span className="flex-1 text-left">{live ? '思考中…' : `思考过程（${text.length} 字）`}</span>
-        <ChevronDown size={15} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && <div className="whitespace-pre-wrap border-t border-line px-3 py-2 text-ink-2">{text}</div>}
+    <div className="chat">
+      <header className="chat-head">
+        <button className="model-pill" onClick={() => setPick(true)}>
+          <span className="ellipsis">{current?.name || model || '选择模型'}</span><IconChevron width={16} />
+        </button>
+        {msgs.length > 0 && <button className="btn-text" onClick={() => { abort.current?.abort(); setMsgs([]); }}>新对话</button>}
+      </header>
+      {models.error && <ErrorBanner message={`模型列表：${models.error}`} onRetry={models.reload} />}
+      <div className="chat-list">
+        {msgs.length === 0 && <div className="chat-empty"><IconBrain width={40} height={40} /><p>发一句话，验证模型输出与思维链</p></div>}
+        {msgs.map((m) => <Bubble key={m.id} m={m} streaming={busy && m === msgs[msgs.length - 1]} onCopy={() => copy(m.content).then(() => toast('已复制', 'ok'))} />)}
+        <div ref={end} />
+      </div>
+      <div className="composer">
+        <textarea rows={1} value={input} placeholder="输入消息…" enterKeyHint="send"
+          onChange={(e) => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(140, e.target.scrollHeight) + 'px'; }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
+        {busy
+          ? <button className="send stop" aria-label="停止" onClick={() => abort.current?.abort()}><IconStop /></button>
+          : <button className="send" aria-label="发送" disabled={!input.trim() || !model} onClick={send}><IconSend /></button>}
+      </div>
+      <Sheet open={pick} onClose={() => setPick(false)} title="模型与思考强度">
+        {efforts.length > 0 && (
+          <>
+            <label className="field-label">思考强度</label>
+            <Segmented value={efforts.includes(effort) ? effort : ''} onChange={setEffort}
+              options={[{value: '', label: '默认'}, ...efforts.map((e) => ({value: e, label: e}))]} />
+          </>
+        )}
+        <label className="field-label">模型</label>
+        <div className="model-list">
+          {models.data?.map((m) => (
+            <button key={m.id} className={`model-item ${m.id === model ? 'on' : ''}`} onClick={() => { setModel(m.id); setPick(false); }}>
+              <span>{m.name}</span><small className="muted">{m.efforts.length ? '支持推理' : m.series}</small>
+            </button>
+          ))}
+        </div>
+      </Sheet>
     </div>
   );
 }
 
-export function Chat() {
-  const models = useQuery({ queryKey: ['chat-models'], queryFn: () => api.get<{ models: ModelInfo[] }>('/chat/models'), staleTime: 300_000 });
-  const [model, setModel] = useState('');
-  const [effort, setEffort] = useState('');
-  const [picking, setPicking] = useState(false);
-  const [msgs, setMsgs] = useState<Msg[]>(() => { try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; } });
-  const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const abort = useRef<AbortController | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
-  const toast = useToast();
-
-  const list = models.data?.models ?? [];
-  const current = list.find((m) => m.id === model);
-  useEffect(() => { if (!model && list.length) setModel(list[0].id); }, [list, model]);
-  useEffect(() => { if (!busy) localStorage.setItem(STORE, JSON.stringify(msgs.slice(-60))); }, [msgs, busy]);
-  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
-
-  async function send() {
-    const text = input.trim();
-    if (!text || busy || !model) return;
-    haptic();
-    const history: Msg[] = [...msgs, { role: 'user', content: text }];
-    setMsgs([...history, { role: 'assistant', content: '', reasoning: '' }]);
-    setInput(''); setBusy(true);
-    const ac = new AbortController(); abort.current = ac;
-    const t0 = performance.now(); let ttft: number | undefined;
-    const patch = (fn: (m: Msg) => Msg) => setMsgs((xs) => { const ys = xs.slice(); ys[ys.length - 1] = fn(ys[ys.length - 1]); return ys; });
-    try {
-      const res = await fetch('/m/api/chat', {
-        method: 'POST', signal: ac.signal, credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'X-WBM': '1' },
-        body: JSON.stringify({ model, reasoning_effort: effort, realm: 'global', messages: history.map(({ role, content }) => ({ role, content })) }),
-      });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new ApiError(res.status, j.detail || `请求失败（${res.status}）`); }
-      await readChatStream(res, (d) => {
-        if (ttft === undefined && (d.content || d.reasoning)) ttft = performance.now() - t0;
-        patch((m) => ({
-          ...m,
-          content: m.content + (d.content ?? ''),
-          reasoning: (m.reasoning ?? '') + (d.reasoning ?? ''),
-          meta: d.usage ? { ...m.meta, pt: d.usage.prompt_tokens, ct: d.usage.completion_tokens, credit: d.usage.credit } : m.meta,
-        }));
-      }, ac.signal);
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') patch((m) => ({ ...m, error: (e as Error).message }));
-    } finally {
-      patch((m) => ({ ...m, meta: { ...m.meta, ttft: ttft && Math.round(ttft), total: Math.round(performance.now() - t0) } }));
-      setBusy(false); abort.current = null;
-    }
-  }
-
+function Bubble({m, streaming, onCopy}: {m: Msg; streaming: boolean; onCopy: () => void}) {
+  const [open, setOpen] = useState(false);
+  if (m.role === 'user') return <div className="bubble user">{m.content}</div>;
   return (
-    <div className="flex h-dvh flex-col">
-      <PageHeader title="对话"
-        action={<div className="flex gap-2">
-          <button className="tap flex max-w-[52vw] items-center gap-1 rounded-full bg-surface-2 px-3 py-2 text-sm" onClick={() => setPicking(true)}>
-            <span className="truncate">{current?.name ?? (models.isPending ? '加载中…' : '选择模型')}</span><ChevronDown size={15} />
+    <div className="bubble bot">
+      {m.reasoning ? (
+        <div className={`think ${open ? 'open' : ''}`}>
+          <button className="think-head" onClick={() => setOpen(!open)}>
+            <IconBrain width={16} />
+            {m.thinkingMs ? `思考了 ${(m.thinkingMs / 1000).toFixed(1)} 秒` : streaming && !m.content ? '思考中…' : '思考过程'}
+            <IconChevron width={14} className="chev" />
           </button>
-          <button className="tap grid size-9 place-items-center rounded-full bg-surface-2" aria-label="清空" onClick={() => { if (!busy) setMsgs([]); }}><Trash2 size={16} /></button>
-        </div>} />
-
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
-        {!msgs.length && <div className="mt-16 text-center text-ink-2"><p className="text-lg font-medium text-ink">即时验证模型输出</p><p className="mt-1 text-sm">走与网关相同的账号池与计量</p></div>}
-        {msgs.map((m, i) => m.role === 'user' ? (
-          <div key={i} className="flex justify-end"><div className="max-w-[82%] whitespace-pre-wrap break-words rounded-3xl rounded-br-lg bg-primary px-4 py-2.5 text-on-primary">{m.content}</div></div>
-        ) : (
-          <div key={i} className="max-w-[92%]">
-            {!!m.reasoning && <ThinkBlock text={m.reasoning} live={busy && i === msgs.length - 1 && !m.content} />}
-            <div className="whitespace-pre-wrap break-words rounded-3xl rounded-bl-lg bg-surface px-4 py-2.5 border border-line">
-              {m.content || (m.error ? '' : <span className="inline-flex gap-1"><i className="size-1.5 animate-bounce rounded-full bg-ink-2" /><i className="size-1.5 animate-bounce rounded-full bg-ink-2 [animation-delay:.15s]" /><i className="size-1.5 animate-bounce rounded-full bg-ink-2 [animation-delay:.3s]" /></span>)}
-              {m.error && <span className="text-bad">{m.error}</span>}
-            </div>
-            {m.meta?.total != null && (
-              <div className="mt-1 flex items-center gap-3 px-2 text-[11px] text-ink-2 tabular-nums">
-                {m.meta.ttft != null && <span>首字 {m.meta.ttft}ms</span>}<span>共 {(m.meta.total / 1000).toFixed(1)}s</span>
-                {m.meta.pt != null && <span>{m.meta.pt}→{m.meta.ct} tok</span>}{m.meta.credit != null && <span>{m.meta.credit} 积分</span>}
-                {m.content && <button aria-label="复制" onClick={async () => toast(await copyText(m.content) ? '已复制' : '复制失败', 'ok')}><Copy size={13} /></button>}
-              </div>
-            )}
-          </div>
-        ))}
-        <div ref={bottom} />
-      </div>
-
-      {/* 输入栏：贴在胶囊底栏上方，随键盘上推（viewport interactive-widget=resizes-content） */}
-      <div className="glass border-t border-line px-3 pt-2" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 84px)' }}>
-        <div className="flex items-end gap-2">
-          <textarea rows={1} value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入消息"
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) { e.preventDefault(); send(); } }}
-            className="max-h-36 min-h-11 flex-1 resize-none rounded-3xl border border-line bg-surface px-4 py-2.5 outline-none focus:border-primary" />
-          {busy
-            ? <button className="tap grid size-11 place-items-center rounded-full bg-ink text-bg" aria-label="停止" onClick={() => abort.current?.abort()}><Square size={16} fill="currentColor" /></button>
-            : <button className="tap grid size-11 place-items-center rounded-full bg-primary text-on-primary disabled:opacity-40" aria-label="发送" disabled={!input.trim() || !model} onClick={send}><ArrowUp size={20} /></button>}
+          {open && <pre className="think-body">{m.reasoning}</pre>}
         </div>
-      </div>
-
-      <Sheet open={picking} onClose={() => setPicking(false)} title="选择模型">
-        <div className="space-y-2">
-          {list.map((m) => (
-            <button key={m.id} onClick={() => { setModel(m.id); setEffort(''); setPicking(false); }}
-              className={`tap block w-full rounded-2xl border p-3 text-left ${m.id === model ? 'border-primary bg-primary/10' : 'border-line bg-surface-2'}`}>
-              <div className="font-medium">{m.name}</div><div className="text-xs text-ink-2">{m.id}</div>
-            </button>
-          ))}
-          {models.isError && <p className="text-sm text-bad">{(models.error as Error).message}</p>}
+      ) : null}
+      <div className="content">{m.content || (streaming && !m.reasoning ? <span className="typing"><i /><i /><i /></span> : null)}</div>
+      {m.error && <div className="bubble-err">{m.error}</div>}
+      {m.meta?.total !== undefined && (
+        <div className="meta">
+          {m.meta.ttft !== undefined && <span>首字 {Math.round(m.meta.ttft)}ms</span>}
+          <span>总 {(m.meta.total / 1000).toFixed(1)}s</span>
+          {m.meta.ct !== undefined && <span>{m.meta.pt}→{m.meta.ct} tok</span>}
+          {m.meta.credit !== undefined && m.meta.credit !== null && <span>扣费 {m.meta.credit}</span>}
+          {m.content && <button className="icon-btn sm" aria-label="复制" onClick={onCopy}><IconCopy width={14} /></button>}
         </div>
-        {!!current?.efforts.length && (
-          <div className="mt-4">
-            <div className="mb-2 text-sm font-medium">思考强度</div>
-            <div className="flex flex-wrap gap-2">
-              {['', ...current.efforts].map((e) => (
-                <button key={e || 'default'} onClick={() => setEffort(e)} className={`tap rounded-full px-3 py-1.5 text-sm ${effort === e ? 'bg-primary text-on-primary' : 'bg-surface-2'}`}>{e || '默认'}</button>
-              ))}
-            </div>
-          </div>
-        )}
-      </Sheet>
+      )}
     </div>
   );
 }

@@ -1,37 +1,58 @@
-import { useState, type FormEvent } from 'react';
-import { api, ApiError } from '../../lib/api';
-import type { Me } from '../../lib/types';
-import { btnPrimary, inputCls } from '../../ui/bits';
+import {useEffect, useState} from 'react';
+import {api, conn} from '../../lib/api';
+import type {Me} from '../../lib/types';
+import {useToast} from '../../ui/kit';
 
-export function Login({ onDone }: { onDone: (me: Me) => void }) {
+export default function Login({onDone}: {onDone: (me: Me) => void}) {
+  const [mode, setMode] = useState<'password' | 'token'>(conn.token ? 'token' : 'password');
   const [username, setU] = useState('');
   const [password, setP] = useState('');
+  const [server, setServer] = useState(conn.server);
+  const [token, setToken] = useState(conn.token);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  const [core, setCore] = useState<{reachable: boolean; error: string} | null>(null);
+  const toast = useToast();
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true); setErr('');
+  useEffect(() => { api.meta().then((m) => setCore(m.core)).catch(() => setCore(null)); }, [server]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true);
     try {
-      const r = await api.post<{ username: string; role: string }>('/auth/login', { username, password });
-      onDone({ username: r.username, role: r.role, via: 'session' });
-    } catch (x) {
-      setErr(x instanceof ApiError ? x.message : '登录失败');
-    } finally { setBusy(false); }
-  }
+      if (mode === 'token') {
+        if (!token.startsWith('wbt_')) throw new Error('请填写管理面 API Token（wbt_ 开头）');
+        conn.set(server, token);
+        onDone(await api.me());
+      } else {
+        conn.set(server, '');
+        const r = await api.login(username, password);
+        onDone({username: r.username, role: r.role});
+      }
+    } catch (err) { toast((err as Error).message, 'err'); }
+    finally { setBusy(false); }
+  };
 
   return (
-    <div className="flex min-h-full flex-col justify-center px-6 pt-safe">
-      <img src="/icon.svg" alt="" className="mb-6 size-16 rounded-2xl" />
-      <h1 className="text-3xl font-bold tracking-tight">WorkBuddy</h1>
-      <p className="mb-8 mt-1 text-ink-2">使用管理后台的账号登录</p>
-      <form onSubmit={submit} className="space-y-3">
-        <input className={inputCls} placeholder="用户名" autoComplete="username" autoCapitalize="off"
-          value={username} onChange={(e) => setU(e.target.value)} required />
-        <input className={inputCls} placeholder="密码" type="password" autoComplete="current-password"
-          value={password} onChange={(e) => setP(e.target.value)} required />
-        {err && <p className="px-1 text-sm text-bad">{err}</p>}
-        <button className={btnPrimary} disabled={busy}>{busy ? '登录中…' : '登录'}</button>
+    <div className="login">
+      <div className="login-brand"><img src="/icon.svg" alt="" /><h1>WorkBuddy</h1><p className="muted">国际版网关 · 移动管理</p></div>
+      {core && !core.reachable && <div className="banner banner-err">核心服务连不上：{core.error}</div>}
+      <form className="login-form" onSubmit={submit}>
+        <div className="seg">
+          <button type="button" className={mode === 'password' ? 'active' : ''} onClick={() => setMode('password')}>账号密码</button>
+          <button type="button" className={mode === 'token' ? 'active' : ''} onClick={() => setMode('token')}>API Token</button>
+        </div>
+        {mode === 'password' ? (
+          <>
+            <input className="input" autoComplete="username" placeholder="用户名" value={username} onChange={(e) => setU(e.target.value)} />
+            <input className="input" type="password" autoComplete="current-password" placeholder="密码" value={password} onChange={(e) => setP(e.target.value)} />
+          </>
+        ) : (
+          <>
+            <input className="input" inputMode="url" placeholder="服务器地址（同源访问可留空）" value={server} onChange={(e) => setServer(e.target.value.trim())} />
+            <input className="input mono" placeholder="wbt_..." value={token} onChange={(e) => setToken(e.target.value.trim())} />
+            <p className="muted small">在桌面版「设置 → API Token」创建；App 内保存于本机。</p>
+          </>
+        )}
+        <button className="btn filled block" disabled={busy}>{busy ? '登录中…' : '登录'}</button>
       </form>
     </div>
   );

@@ -1,153 +1,136 @@
-import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, KeyRound, Plus, Trash2 } from 'lucide-react';
-import { api } from '../../lib/api';
-import { copyText, haptic } from '../../lib/device';
-import { fmtInt } from '../../lib/format';
-import type { KeyCard, ModelInfo } from '../../lib/types';
-import { Sheet } from '../../ui/Sheet';
-import { Switch } from '../../ui/Switch';
-import { useToast } from '../../ui/Toast';
-import { Empty, ErrorCard, Fab, Field, PageHeader, Skeleton, btnGhost, btnPrimary, inputCls } from '../../ui/bits';
+import {useMemo, useState} from 'react';
+import {api} from '../../lib/api';
+import {copy, haptic} from '../../lib/device';
+import {ago, num} from '../../lib/format';
+import {useAsync, usePullToRefresh} from '../../lib/hooks';
+import type {KeyCard, ModelInfo} from '../../lib/types';
+import {Empty, ErrorBanner, Fab, Header, Sheet, Skeleton, Switch, useToast} from '../../ui/kit';
+import {IconCopy, IconPlus} from '../../ui/Icons';
 
-function ModelChips({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
-  const q = useQuery({ queryKey: ['models', 'global'], queryFn: () => api.get<{ models: ModelInfo[] }>('/keys/models'), staleTime: 300_000 });
-  const [kw, setKw] = useState('');
-  const models = (q.data?.models ?? []).filter((m) => !kw || m.id.toLowerCase().includes(kw.toLowerCase()) || m.name.toLowerCase().includes(kw.toLowerCase()));
-  const all = value.length === 0;
+export default function Keys() {
+  const list = useAsync(() => api.keys());
+  const models = useAsync(() => api.models().then((r) => r.models));
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<KeyCard | null>(null);
+  const [created, setCreated] = useState<{key: string; base: string} | null>(null);
+  const toast = useToast();
+  const {ref, pull} = usePullToRefresh(list.reload);
+
+  const toggle = async (k: KeyCard, enabled: boolean) => {
+    haptic();
+    const prev = list.data;
+    if (prev) list.set({...prev, items: prev.items.map((x) => x.id === k.id ? {...x, enabled} : x)});
+    try { await api.updateKey(k.id, {enabled}); }
+    catch (e) { if (prev) list.set(prev); toast((e as Error).message, 'err'); }
+  };
+
   return (
-    <div>
-      <input className={`${inputCls} mb-2`} placeholder="搜索模型" value={kw} onChange={(e) => setKw(e.target.value)} />
-      <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
-        <button type="button" onClick={() => onChange([])} className={`tap rounded-full px-3 py-1.5 text-sm ${all ? 'bg-primary text-on-primary' : 'bg-surface-2'}`}>全部模型</button>
-        {models.map((m) => {
-          const on = value.includes(m.id);
-          return <button type="button" key={m.id} onClick={() => onChange(on ? value.filter((x) => x !== m.id) : [...value, m.id])}
-            className={`tap rounded-full px-3 py-1.5 text-sm ${on ? 'bg-primary text-on-primary' : 'bg-surface-2'}`}>{m.name}</button>;
-        })}
-        {q.isPending && <span className="text-sm text-ink-2">加载模型…</span>}
-        {q.isError && <span className="text-sm text-bad">模型清单暂时不可用，可留空表示全部</span>}
+    <div className="page" ref={ref}>
+      <div className="ptr" style={{height: pull}} />
+      <Header title="密钥" sub={list.data ? `${list.data.enabled} 个启用 · 共 ${list.data.total}` : undefined} />
+      {list.error && <ErrorBanner message={list.error} onRetry={list.reload} />}
+      {list.loading && !list.data && <Skeleton h={88} n={3} />}
+      {list.data?.items.length === 0 && <Empty title="还没有密钥" hint="生成一个，即可在任意 OpenAI / Anthropic 兼容客户端里使用" />}
+      <div className="stack">
+        {list.data?.items.map((k) => (
+          <article key={k.id} className={`keycard ${k.enabled ? '' : 'off'}`} onClick={() => setEditing(k)}>
+            <div className="grow">
+              <div className="row"><strong className="ellipsis">{k.name}</strong>{k.from_packet && <span className="tag">红包</span>}</div>
+              <div className="mono muted">{k.prefix}••••</div>
+              <div className="muted tiny">{k.models.length ? `${k.models.length} 个模型` : '全部模型'} · {num(k.used_tokens)} Token{k.quota ? ` / ${num(k.quota)}` : ''} · {ago(k.last_used_at)}</div>
+              {k.usage_ratio !== null && <div className="ttl"><span style={{width: `${k.usage_ratio * 100}%`}} /></div>}
+            </div>
+            <Switch label="启用" on={k.enabled} onChange={(v) => toggle(k, v)} />
+          </article>
+        ))}
       </div>
+      <Fab label="生成密钥" icon={<IconPlus />} onClick={() => setCreating(true)} />
+      <KeyForm open={creating} models={models.data || []} onClose={() => setCreating(false)}
+        onSubmit={async (name, ms, quota) => {
+          const r = await api.createKey({name, models: ms, quota});
+          setCreating(false); setCreated({key: r.key, base: r.hint.base_url}); list.reload();
+        }} />
+      <KeyForm open={!!editing} initial={editing ?? undefined} models={models.data || []} onClose={() => setEditing(null)}
+        onSubmit={async (name, ms, quota) => { await api.updateKey(editing!.id, {name, models: ms, quota}); setEditing(null); toast('已保存', 'ok'); list.reload(); }}
+        onDelete={async () => { await api.deleteKey(editing!.id); setEditing(null); toast('已删除', 'ok'); list.reload(); }} />
+      <RevealSheet value={created} onClose={() => setCreated(null)} />
     </div>
   );
 }
 
-function CreateSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [name, setName] = useState('');
-  const [models, setModels] = useState<string[]>([]);
-  const [quota, setQuota] = useState('');
-  const [created, setCreated] = useState<KeyCard | null>(null);
-  const [copied, setCopied] = useState(false);
-  const qc = useQueryClient();
+function KeyForm({open, initial, models, onClose, onSubmit, onDelete}: {
+  open: boolean; initial?: KeyCard; models: ModelInfo[]; onClose: () => void;
+  onSubmit: (name: string, models: string[], quota: number) => Promise<void>; onDelete?: () => Promise<void>;
+}) {
   const toast = useToast();
-  const m = useMutation({
-    mutationFn: () => api.post<KeyCard>('/keys', { name: name.trim(), models, quota: Number(quota) || 0 }),
-    onSuccess: async (k) => {
-      setCreated(k); qc.invalidateQueries({ queryKey: ['keys'] });
-      if (k.secret && await copyText(k.secret)) { setCopied(true); toast('已生成并复制', 'ok'); }
-    },
-    onError: (e) => toast((e as Error).message, 'bad'),
-  });
-  const close = () => { setName(''); setModels([]); setQuota(''); setCreated(null); setCopied(false); onClose(); };
-  const settings = useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ gateway_url: string }>('/settings'), staleTime: Infinity });
-  const base = settings.data?.gateway_url ?? '';
+  const [name, setName] = useState('');
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [quota, setQuota] = useState('');
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [lastOpen, setLastOpen] = useState(false);
+  if (open !== lastOpen) {  // 每次打开重置表单
+    setLastOpen(open);
+    if (open) { setName(initial?.name || ''); setPicked(new Set(initial?.models || [])); setQuota(initial?.quota ? String(initial.quota) : ''); setQuery(''); setConfirmDel(false); }
+  }
+  const groups = useMemo(() => {
+    const m = new Map<string, ModelInfo[]>();
+    models.filter((x) => !query || x.id.toLowerCase().includes(query.toLowerCase()) || x.name.toLowerCase().includes(query.toLowerCase()))
+      .forEach((x) => { const g = x.series || '其他'; m.set(g, [...(m.get(g) || []), x]); });
+    return [...m.entries()];
+  }, [models, query]);
+  const flip = (id: string) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const submit = async () => {
+    if (!name.trim()) return toast('请填写名称', 'err');
+    setBusy(true);
+    try { await onSubmit(name.trim(), [...picked], Number(quota) || 0); }
+    catch (e) { toast((e as Error).message, 'err'); }
+    finally { setBusy(false); }
+  };
 
   return (
-    <Sheet open={open} onClose={close} title={created ? '密钥已生成' : '生成密钥'}>
-      {!created ? (
-        <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }}>
-          <Field label="名称"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：iPhone 上的 Cherry Studio" maxLength={64} required autoFocus /></Field>
-          <Field label="模型授权" hint="不选即允许全部模型"><ModelChips value={models} onChange={setModels} /></Field>
-          <Field label="Token 额度" hint="留空表示不限"><input className={inputCls} inputMode="numeric" pattern="[0-9]*" value={quota} onChange={(e) => setQuota(e.target.value.replace(/\D/g, ''))} placeholder="不限" /></Field>
-          <button className={btnPrimary} disabled={!name.trim() || m.isPending}>{m.isPending ? '生成中…' : '生成并复制'}</button>
-        </form>
-      ) : (
-        <div className="space-y-4">
-          <p className="text-sm text-ink-2">明文只显示这一次，关闭后无法再查看，请立即保存。</p>
-          <div className="break-all rounded-2xl bg-surface-2 p-4 font-mono text-sm">{created.secret}</div>
-          <button className={`${btnPrimary} flex items-center justify-center gap-2`} onClick={async () => { if (created.secret && await copyText(created.secret)) { setCopied(true); toast('已复制', 'ok'); } }}>
-            {copied ? <Check size={18} /> : <Copy size={18} />}{copied ? '已复制' : '复制密钥'}
-          </button>
-          <button className={`${btnGhost} flex items-center justify-center gap-2`} onClick={async () => {
-            const cfg = `curl ${base}/v1/chat/completions \\\n  -H "Authorization: Bearer ${created.secret}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${created.models[0] ?? 'MODEL'}","messages":[{"role":"user","content":"hi"}]}'`;
-            if (await copyText(cfg)) toast('已复制 curl 示例', 'ok');
-          }}><Copy size={18} />复制为 curl</button>
-          <button className={btnGhost} onClick={close}>我已保存</button>
-        </div>
-      )}
+    <Sheet open={open} onClose={onClose} title={initial ? '编辑密钥' : '生成密钥'}
+      footer={<>
+        {onDelete && (confirmDel
+          ? <button className="btn danger" onClick={() => onDelete().catch((e) => toast(e.message, 'err'))}>确认删除</button>
+          : <button className="btn text-danger" onClick={() => setConfirmDel(true)}>删除</button>)}
+        <button className="btn filled grow" disabled={busy} onClick={submit}>{busy ? '提交中…' : initial ? '保存' : '生成'}</button>
+      </>}>
+      <label className="field-label">名称</label>
+      <input className="input" value={name} maxLength={64} placeholder="例如：我的手机" onChange={(e) => setName(e.target.value)} />
+      <label className="field-label">Token 额度 <span className="muted">（留空 = 不限）</span></label>
+      <input className="input" inputMode="numeric" value={quota} placeholder="不限" onChange={(e) => setQuota(e.target.value.replace(/\D/g, ''))} />
+      <label className="field-label">模型授权 <span className="muted">{picked.size ? `已选 ${picked.size}` : '未选 = 全部模型'}</span></label>
+      <input className="input" value={query} placeholder="搜索模型" onChange={(e) => setQuery(e.target.value)} />
+      <div className="chips-scroll">
+        {groups.map(([g, ms]) => (
+          <div key={g}><div className="group-label">{g}</div>
+            <div className="chips">{ms.map((m) => <button key={m.id} className={`chip ${picked.has(m.id) ? 'on' : ''}`} onClick={() => flip(m.id)}>{m.name}</button>)}</div>
+          </div>
+        ))}
+        {models.length === 0 && <p className="muted small">模型列表加载中或不可用；未选择时默认放行全部模型。</p>}
+      </div>
     </Sheet>
   );
 }
 
-export function Keys() {
-  const q = useQuery({ queryKey: ['keys'], queryFn: () => api.get<{ keys: KeyCard[] }>('/keys') });
-  const [creating, setCreating] = useState(false);
-  const [edit, setEdit] = useState<KeyCard | null>(null);
-  const [models, setModels] = useState<string[]>([]);
-  const qc = useQueryClient();
+function RevealSheet({value, onClose}: {value: {key: string; base: string} | null; onClose: () => void}) {
   const toast = useToast();
-
-  const patch = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: Partial<KeyCard> }) => api.patch(`/keys/${id}`, body),
-    onMutate: ({ id, body }) => {
-      haptic();
-      const prev = qc.getQueryData<{ keys: KeyCard[] }>(['keys']);
-      qc.setQueryData<{ keys: KeyCard[] }>(['keys'], (d) => d && ({ keys: d.keys.map((k) => k.id === id ? { ...k, ...body } : k) }));
-      return { prev };
-    },
-    onError: (e, _v, ctx) => { if (ctx?.prev) qc.setQueryData(['keys'], ctx.prev); toast((e as Error).message, 'bad'); },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['keys'] }),
-  });
-  const del = useMutation({
-    mutationFn: (id: number) => api.del(`/keys/${id}`),
-    onSuccess: () => { toast('已删除', 'ok'); setEdit(null); qc.invalidateQueries({ queryKey: ['keys'] }); },
-    onError: (e) => toast((e as Error).message, 'bad'),
-  });
-
+  const c = (t: string, what: string) => copy(t).then((ok) => toast(ok ? `已复制${what}` : '复制失败', ok ? 'ok' : 'err'));
+  const curl = value ? `curl ${value.base}/chat/completions \\\n  -H "Authorization: Bearer ${value.key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"global:claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}'` : '';
   return (
-    <div className="pb-tabbar">
-      <PageHeader title="密钥" subtitle={q.data ? `${q.data.keys.filter((k) => k.enabled).length} 个启用` : undefined} />
-      <div className="space-y-3 p-4">
-        {q.isError && <ErrorCard message={(q.error as Error).message} onRetry={() => q.refetch()} />}
-        {q.isPending && [0, 1].map((i) => <Skeleton key={i} className="h-28" />)}
-        {q.isSuccess && !q.data.keys.length && <Empty icon={<KeyRound />} title="还没有密钥" hint="点右下角 + 一键生成" />}
-        {q.data?.keys.map((k) => (
-          <div key={k.id} role="button" tabIndex={0} onClick={() => { setEdit(k); setModels(k.models); }} className="card tap p-4">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium">{k.name}</div>
-                <div className="mt-0.5 font-mono text-xs text-ink-2">{k.prefix}••••</div>
-              </div>
-              <Switch checked={k.enabled} label={`启用 ${k.name}`} onChange={(v) => patch.mutate({ id: k.id, body: { enabled: v } })} />
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {k.models.length ? k.models.slice(0, 4).map((m) => <span key={m} className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px]">{m.replace(/^global:/, '')}</span>)
-                : <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px]">全部模型</span>}
-              {k.models.length > 4 && <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px]">+{k.models.length - 4}</span>}
-            </div>
-            <div className="mt-3">
-              <div className="flex justify-between text-xs text-ink-2"><span>已用 {fmtInt(k.used_tokens)} tokens</span><span>{k.quota ? `额度 ${fmtInt(k.quota)}` : '不限额'}</span></div>
-              {k.usage_ratio != null && <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2"><div className={`h-full ${k.usage_ratio > 0.9 ? 'bg-bad' : 'bg-primary'}`} style={{ width: `${k.usage_ratio * 100}%` }} /></div>}
-            </div>
-          </div>
-        ))}
+    <Sheet open={!!value} onClose={onClose} title="密钥已生成"
+      footer={<button className="btn filled block" onClick={onClose}>我已保存</button>}>
+      <p className="warn-text">明文只显示这一次，关闭后无法再查看。</p>
+      <div className="secret mono" onClick={() => value && c(value.key, '密钥')}>{value?.key}</div>
+      <div className="actions">
+        <button className="btn filled" onClick={() => value && c(value.key, '密钥')}><IconCopy width={18} />复制密钥</button>
+        <button className="btn tonal" onClick={() => c(curl, ' curl')}>复制 curl</button>
+        <button className="btn tonal" onClick={() => value && c(`OPENAI_BASE_URL=${value.base}\nOPENAI_API_KEY=${value.key}`, '环境变量')}>复制 SDK 配置</button>
       </div>
-      <Fab onClick={() => setCreating(true)} label="生成密钥"><Plus size={26} /></Fab>
-      <CreateSheet open={creating} onClose={() => setCreating(false)} />
-
-      <Sheet open={!!edit} onClose={() => setEdit(null)} title={edit?.name ?? ''}>
-        {edit && (
-          <div className="space-y-4">
-            <p className="text-xs text-ink-2">出于安全，已生成的密钥只显示前缀；忘记了请删除后重新生成。</p>
-            <Field label="模型授权" hint="不选即允许全部模型"><ModelChips value={models} onChange={setModels} /></Field>
-            <button className={btnPrimary} disabled={patch.isPending} onClick={() => patch.mutate({ id: edit.id, body: { models } }, { onSuccess: () => { toast('已保存', 'ok'); setEdit(null); } })}>保存</button>
-            <button className={`${btnGhost} flex items-center justify-center gap-2 text-bad`} disabled={del.isPending}
-              onClick={() => { if (window.confirm(`删除密钥「${edit.name}」？使用它的客户端会立即失效。`)) del.mutate(edit.id); }}>
-              <Trash2 size={18} />删除密钥
-            </button>
-          </div>
-        )}
-      </Sheet>
-    </div>
+      <p className="muted small">Base URL：<span className="mono">{value?.base}</span></p>
+    </Sheet>
   );
 }

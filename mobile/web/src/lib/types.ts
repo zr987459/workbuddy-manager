@@ -1,28 +1,35 @@
-export type Pill = 'ok' | 'cooling' | 'disabled' | 'expired' | 'error' | 'offline';
+export type Realm = 'global' | 'cn';
+export type Pill = 'ok' | 'busy' | 'cooling' | 'paused' | 'expired' | 'banned' | 'invalid' | 'offline';
+
+export interface PoolCounts extends Record<Pill, number> {total: number; usable: number}
 
 export interface Overview {
-  state: 'ok' | 'degraded' | 'down';
-  gateway: { core: boolean; upstream: boolean | null; detail: string };
+  realm: Realm;
+  at: number;
+  gateway: {state: 'ok' | 'degraded' | 'down'; label: string; detail: string} | null;
   inflight: number | null;
-  today: null | {
-    requests: number; tokens: number; credit: number | null; failed: number;
-    success_rate: number | null; top_model: string | null; active_keys: number;
-  };
-  pool: null | (Record<Pill, number> & { total: number });
+  today: {requests: number; tokens: number; credit: number; failures: number; success_rate: number | null} | null;
+  week: {requests: number; tokens: number} | null;
+  top_model: string | null;
+  active_keys: number | null;
+  pool: PoolCounts | null;
+  recent_errors: {id: number; ts: number; status: number; model: string; key: string; error: string}[] | null;
+  errors: Record<string, string>;
 }
 
 export interface AccountCard {
-  file: string; uid: string; nickname: string; note: string; realm: string;
+  id: string; file: string; uid: string; name: string; realm: Realm; note: string;
   pill: Pill; reason: string; enabled: boolean; in_flight: number;
-  success_count: number; err_total: number; last_err: string; token_remain_seconds: number;
+  success: number | null; errors: number | null; last_error: string; weight: number;
+  token: {expires_at: number; remain_seconds: number; ratio: number | null};
 }
 
 export interface KeyCard {
   id: number; name: string; prefix: string; enabled: boolean; models: string[]; realm: string;
-  quota: number; used_tokens: number; usage_ratio: number | null;
-  expires_at: number | null; last_used_at: number | null; from_red_packet: boolean;
-  secret?: string;
+  quota: number; used_tokens: number; usage_ratio: number | null; used_credit: number;
+  expires_at: number | null; last_used_at: number | null; created_at: number | null; from_packet: boolean;
 }
 
-export interface ModelInfo { id: string; name: string; efforts: string[]; series?: string }
-export interface Me { username: string; role: string; via: 'session' | 'token' }
+export interface ModelInfo {id: string; name: string; efforts: string[]; series: string}
+
+export interface Me {username: string; role: 'admin' | 'viewer'}

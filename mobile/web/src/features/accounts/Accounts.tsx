@@ -1,99 +1,149 @@
-import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, Plus, RefreshCw, Snowflake, Users } from 'lucide-react';
-import { api } from '../../lib/api';
-import { copyText, haptic } from '../../lib/device';
-import { fmtDuration } from '../../lib/format';
-import type { AccountCard, Pill as PillT } from '../../lib/types';
-import { Pill } from '../../ui/Pill';
-import { Sheet } from '../../ui/Sheet';
-import { Switch } from '../../ui/Switch';
-import { useToast } from '../../ui/Toast';
-import { Empty, ErrorCard, Fab, PageHeader, Skeleton, btnGhost } from '../../ui/bits';
-import { AddAccountSheet } from './AddAccountSheet';
+import {useCallback, useEffect, useRef, useState} from 'react';
+import {api} from '../../lib/api';
+import {copy, haptic} from '../../lib/device';
+import {duration} from '../../lib/format';
+import {useAsync, usePullToRefresh} from '../../lib/hooks';
+import type {AccountCard} from '../../lib/types';
+import {Empty, ErrorBanner, Fab, Header, Pill, Segmented, Sheet, Skeleton, Switch, useToast} from '../../ui/kit';
+import {IconCopy, IconPlus, IconRefresh} from '../../ui/Icons';
 
-type Payload = { accounts: AccountCard[]; pool_available: boolean; manageable: boolean; counts: Record<string, number> };
-type Filter = 'all' | 'ok' | 'cooling' | 'bad';
-const FILTERS: [Filter, string][] = [['all', '全部'], ['ok', '可用'], ['cooling', '冷却'], ['bad', '异常']];
-const match = (f: Filter, p: PillT) =>
-  f === 'all' || (f === 'ok' && p === 'ok') || (f === 'cooling' && (p === 'cooling' || p === 'offline')) ||
-  (f === 'bad' && (p === 'expired' || p === 'error' || p === 'disabled'));
+type Filter = 'all' | 'usable' | 'cooling' | 'attention';
 
-export function Accounts() {
-  const q = useQuery({ queryKey: ['accounts'], queryFn: () => api.get<Payload>('/accounts'), refetchInterval: 15000 });
+export default function Accounts() {
   const [filter, setFilter] = useState<Filter>('all');
-  const [adding, setAdding] = useState(false);
+  const list = useAsync(() => api.accounts({pill: filter === 'all' ? undefined : filter}), [filter]);
   const [detail, setDetail] = useState<AccountCard | null>(null);
-  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
   const toast = useToast();
+  const {ref, pull} = usePullToRefresh(list.reload);
+  const counts = list.data?.counts;
 
-  // 乐观更新：开关立即反馈，失败回滚
-  const toggle = useMutation({
-    mutationFn: (a: { file: string; enabled: boolean }) => api.post(`/accounts/${encodeURIComponent(a.file)}/enabled`, { enabled: a.enabled }),
-    onMutate: async (a) => {
-      await qc.cancelQueries({ queryKey: ['accounts'] });
-      const prev = qc.getQueryData<Payload>(['accounts']);
-      qc.setQueryData<Payload>(['accounts'], (d) => d && ({ ...d, accounts: d.accounts.map((x) => x.file === a.file ? { ...x, enabled: a.enabled, pill: a.enabled ? 'ok' : 'disabled' } : x) }));
-      haptic();
-      return { prev };
-    },
-    onError: (e, _a, ctx) => { if (ctx?.prev) qc.setQueryData(['accounts'], ctx.prev); toast((e as Error).message, 'bad'); },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['accounts'] }),
-  });
-
-  const action = useMutation({
-    mutationFn: ({ file, op }: { file: string; op: 'refresh' | 'clear-cooling' }) => api.post(`/accounts/${encodeURIComponent(file)}/${op}`),
-    onSuccess: (_d, v) => { toast(v.op === 'refresh' ? 'Token 已刷新' : '已解除冷却', 'ok'); qc.invalidateQueries({ queryKey: ['accounts'] }); setDetail(null); },
-    onError: (e) => toast((e as Error).message, 'bad'),
-  });
-
-  const list = useMemo(() => (q.data?.accounts ?? []).filter((a) => match(filter, a.pill)), [q.data, filter]);
+  const toggle = async (a: AccountCard, enabled: boolean) => {
+    haptic();
+    const prev = list.data;
+    if (prev) list.set({...prev, items: prev.items.map((x) => x.id === a.id ? {...x, enabled, pill: enabled ? 'ok' : 'paused'} : x)});
+    try { await api.toggleAccount(a.file, enabled); toast(enabled ? `已启用 ${a.name}` : `已停用 ${a.name}`, 'ok'); }
+    catch (e) { if (prev) list.set(prev); toast((e as Error).message, 'err'); }
+  };
 
   return (
-    <div className="pb-tabbar">
-      <PageHeader title="账号" subtitle={q.data ? `${q.data.counts.ok ?? 0} 可用 · 共 ${q.data.counts.total ?? 0}` : undefined} />
-      <div className="flex gap-2 overflow-x-auto px-4 py-3">
-        {FILTERS.map(([id, label]) => (
-          <button key={id} onClick={() => setFilter(id)}
-            className={`tap shrink-0 rounded-full px-4 py-2 text-sm font-medium ${filter === id ? 'bg-ink text-bg' : 'bg-surface text-ink-2 border border-line'}`}>{label}</button>
-        ))}
-      </div>
-      <div className="space-y-3 px-4">
-        {q.isError && <ErrorCard message={(q.error as Error).message} onRetry={() => q.refetch()} />}
-        {q.isPending && [0, 1, 2].map((i) => <Skeleton key={i} className="h-24" />)}
-        {q.isSuccess && !list.length && <Empty icon={<Users />} title={filter === 'all' ? '还没有账号' : '没有符合条件的账号'} hint={filter === 'all' ? '点右下角 + 添加国际版账号' : undefined} />}
-        {list.map((a) => (
-          <div key={a.file} role="button" tabIndex={0} onClick={() => setDetail(a)} className="card tap flex items-center gap-3 p-4">
-            <div className="grid size-11 shrink-0 place-items-center rounded-full bg-primary/12 text-lg font-semibold text-primary">{a.nickname.slice(0, 1).toUpperCase()}</div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2"><span className="truncate font-medium">{a.nickname}</span>{a.realm === 'global' && <span className="text-[10px] text-ink-2">INTL</span>}</div>
-              <div className="mt-1 flex items-center gap-2"><Pill kind={a.pill} />{a.in_flight > 0 && <span className="text-xs text-ink-2">在途 {a.in_flight}</span>}</div>
-              {a.reason && a.pill !== 'ok' && <div className="mt-1 truncate text-xs text-ink-2">{a.reason}</div>}
+    <div className="page" ref={ref}>
+      <div className="ptr" style={{height: pull}} />
+      <Header title="账号" sub={counts ? `${counts.usable} 可用 · 共 ${counts.total}` : undefined} />
+      <Segmented<Filter> value={filter} onChange={setFilter} options={[
+        {value: 'all', label: '全部'},
+        {value: 'usable', label: '可用'},
+        {value: 'cooling', label: '冷却', badge: counts?.cooling},
+        {value: 'attention', label: '异常', badge: counts ? counts.expired + counts.banned + counts.invalid + counts.offline : 0},
+      ]} />
+      {list.error && <ErrorBanner message={list.error} onRetry={list.reload} />}
+      {list.loading && !list.data && <Skeleton h={96} n={4} />}
+      {list.data && list.data.items.length === 0 && (
+        <Empty title={filter === 'all' ? '还没有账号' : '没有符合条件的账号'} hint={filter === 'all' ? '点右下角，用 workbuddy.ai 一键授权添加' : undefined} />
+      )}
+      <div className="stack">
+        {list.data?.items.map((a) => (
+          <article key={a.id} className={`acct ${a.pill}`} onClick={() => setDetail(a)}>
+            <div className="avatar" aria-hidden>{a.name.slice(0, 1).toUpperCase()}</div>
+            <div className="grow">
+              <div className="row"><strong className="ellipsis">{a.name}</strong><Pill kind={a.pill} /></div>
+              <div className="muted small ellipsis">{a.note || a.reason}</div>
+              <div className="ttl" title="登录剩余有效期"><span style={{width: `${(a.token.ratio ?? 0) * 100}%`}} /></div>
+              <div className="muted tiny">令牌 {duration(a.token.remain_seconds)}{a.in_flight ? ` · 在途 ${a.in_flight}` : ''}</div>
             </div>
-            <Switch checked={a.enabled} label={`启用 ${a.nickname}`} disabled={!q.data?.manageable}
-              onChange={(v) => toggle.mutate({ file: a.file, enabled: v })} />
-          </div>
+            <Switch label="启用" on={a.enabled} disabled={!list.data?.manageable} onChange={(v) => toggle(a, v)} />
+          </article>
         ))}
       </div>
-
-      <Fab onClick={() => setAdding(true)} label="添加账号"><Plus size={26} /></Fab>
-      <AddAccountSheet open={adding} onClose={() => setAdding(false)} />
-
-      <Sheet open={!!detail} onClose={() => setDetail(null)} title={detail?.nickname ?? ''}>
-        {detail && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2"><Pill kind={detail.pill} />{detail.reason && <span className="text-sm text-ink-2">{detail.reason}</span>}</div>
-            <dl className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-2xl bg-surface-2 p-3"><dt className="text-xs text-ink-2">Token 剩余</dt><dd className="mt-1 font-medium">{fmtDuration(detail.token_remain_seconds)}</dd></div>
-              <div className="rounded-2xl bg-surface-2 p-3"><dt className="text-xs text-ink-2">成功 / 失败</dt><dd className="mt-1 font-medium tabular-nums">{detail.success_count} / {detail.err_total}</dd></div>
-            </dl>
-            {detail.last_err && <p className="rounded-2xl bg-bad/10 p-3 text-xs text-bad">{detail.last_err}</p>}
-            <button className={`${btnGhost} flex items-center justify-center gap-2`} onClick={async () => toast(await copyText(detail.uid) ? '已复制 UID' : '复制失败', 'ok')}><Copy size={18} />复制 UID</button>
-            <button className={`${btnGhost} flex items-center justify-center gap-2`} disabled={action.isPending} onClick={() => action.mutate({ file: detail.file, op: 'refresh' })}><RefreshCw size={18} />刷新 Token</button>
-            {detail.pill === 'cooling' && <button className={`${btnGhost} flex items-center justify-center gap-2`} disabled={action.isPending} onClick={() => action.mutate({ file: detail.file, op: 'clear-cooling' })}><Snowflake size={18} />解除冷却</button>}
-          </div>
-        )}
-      </Sheet>
+      <Fab label="添加账号" icon={<IconPlus />} onClick={() => setAdding(true)} />
+      <AccountSheet a={detail} onClose={() => setDetail(null)} onChanged={list.reload} />
+      <AddAccountSheet open={adding} onClose={() => setAdding(false)} onDone={() => { setAdding(false); list.reload(); }} />
     </div>
+  );
+}
+
+function AccountSheet({a, onClose, onChanged}: {a: AccountCard | null; onClose: () => void; onChanged: () => void}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState('');
+  const run = async (what: string, fn: () => Promise<{ok?: boolean; message?: string}>) => {
+    setBusy(what);
+    try { const r = await fn(); toast(r?.message || '完成', r?.ok === false ? 'err' : 'ok'); onChanged(); }
+    catch (e) { toast((e as Error).message, 'err'); }
+    finally { setBusy(''); }
+  };
+  return (
+    <Sheet open={!!a} onClose={onClose} title={a?.name}>
+      {a && (
+        <>
+          <div className="kv"><span>状态</span><span><Pill kind={a.pill} /> {a.reason}</span></div>
+          <div className="kv"><span>UID</span><button className="btn-text mono" onClick={() => copy(a.uid).then((ok) => toast(ok ? '已复制 UID' : '复制失败', ok ? 'ok' : 'err'))}>{a.uid.slice(0, 18)}… <IconCopy width={16} /></button></div>
+          <div className="kv"><span>版本</span><span>{a.realm === 'global' ? '国际版' : '国内版'}</span></div>
+          <div className="kv"><span>令牌剩余</span><span>{duration(a.token.remain_seconds)}</span></div>
+          <div className="kv"><span>成功 / 错误</span><span>{a.success ?? '—'} / {a.errors ?? '—'}</span></div>
+          {a.last_error && <div className="kv"><span>最近错误</span><span className="small">{a.last_error}</span></div>}
+          <div className="actions">
+            <button className="btn tonal" disabled={!!busy} onClick={() => run('refresh', () => api.refreshAccount(a.file))}><IconRefresh width={18} />{busy === 'refresh' ? '续期中…' : '刷新令牌'}</button>
+            <button className="btn tonal" disabled={!!busy} onClick={() => run('test', () => api.testAccount(a.file))}>{busy === 'test' ? '测试中…' : '连通测试'}</button>
+          </div>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+const REGIONS = ['HK', 'SG', 'JP', 'US', 'GB', 'DE', 'TW', 'KR'];
+
+function AddAccountSheet({open, onClose, onDone}: {open: boolean; onClose: () => void; onDone: () => void}) {
+  const toast = useToast();
+  const [region, setRegion] = useState('HK');
+  const [phase, setPhase] = useState<'idle' | 'waiting' | 'done'>('idle');
+  const [link, setLink] = useState('');
+  const timer = useRef<number | undefined>(undefined);
+  const stop = useCallback(() => { window.clearTimeout(timer.current); }, []);
+  useEffect(() => { if (!open) { stop(); setPhase('idle'); setLink(''); } }, [open, stop]);
+  useEffect(() => stop, [stop]);
+
+  const start = async () => {
+    // 先同步开窗再填地址：移动端浏览器会拦截 await 之后的 window.open
+    const win = window.open('about:blank', '_blank');
+    try {
+      const s = await api.startLogin(region);
+      setLink(s.auth_url); setPhase('waiting');
+      if (win) win.location.href = s.auth_url;
+      const poll = async () => {
+        try {
+          const r = await api.pollLogin(s.state, region);
+          if (r.status === 'success') { haptic(30); setPhase('done'); toast(`已添加 ${r.name || r.uid}`, 'ok'); setTimeout(onDone, 600); return; }
+          if (r.done) { toast(r.status === 'expired' ? '授权链接已过期，请重新发起' : (r.message || r.status), 'err'); setPhase('idle'); return; }
+        } catch (e) { toast((e as Error).message, 'err'); }
+        timer.current = window.setTimeout(poll, 2000);
+      };
+      timer.current = window.setTimeout(poll, 2000);
+    } catch (e) { win?.close(); toast((e as Error).message, 'err'); }
+  };
+
+  return (
+    <Sheet open={open} onClose={onClose} title="添加国际版账号">
+      {phase === 'idle' && (
+        <>
+          <p className="muted">在 workbuddy.ai 完成授权后会自动回到这里，并完成地区注册与 trial 领取。</p>
+          <label className="field-label">注册地区</label>
+          <div className="chips">{REGIONS.map((r) => <button key={r} className={`chip ${r === region ? 'on' : ''}`} onClick={() => setRegion(r)}>{r}</button>)}</div>
+          <button className="btn filled block" onClick={start}>前往 workbuddy.ai 授权</button>
+        </>
+      )}
+      {phase === 'waiting' && (
+        <div className="center">
+          <div className="spinner" />
+          <p>等待授权完成…</p>
+          <p className="muted small">没有自动跳转？</p>
+          <div className="actions">
+            <a className="btn tonal" href={link} target="_blank" rel="noopener">重新打开</a>
+            <button className="btn tonal" onClick={() => copy(link).then(() => toast('链接已复制', 'ok'))}>复制链接</button>
+          </div>
+        </div>
+      )}
+      {phase === 'done' && <div className="center"><div className="check">✓</div><p>添加成功</p></div>}
+    </Sheet>
   );
 }

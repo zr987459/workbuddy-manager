@@ -1,0 +1,1 @@
+async function c(e){try{await navigator.clipboard.writeText(e)}catch{const t=document.createElement("textarea");t.value=e,t.style.position="fixed",t.style.opacity="0",document.body.appendChild(t),t.select();const a=document.execCommand("copy");if(t.remove(),!a)return!1}return o(),!0}const o=(e=8)=>navigator.vibrate?.(e);export{c,o as h};

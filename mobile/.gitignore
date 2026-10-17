@@ -1,0 +1,5 @@
+data/
+web/node_modules/
+web/*.tsbuildinfo
+__pycache__/
+.pytest_cache/
