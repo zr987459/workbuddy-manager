@@ -1,6 +1,5 @@
-// WorkBuddy Mobile 交互逻辑 - 直连本地自洽 Go 引擎 (127.0.0.1:7863)
+// WorkBuddy Mobile 交互逻辑 - 同源直连 (http://127.0.0.1:7863)
 
-const API_BASE = 'http://127.0.0.1:7863';
 let currentTab = 'overview';
 let activePollTimer = null;
 
@@ -10,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.visibilityState === 'visible' && currentTab === 'overview') {
       loadOverview();
     }
-  }, 10000);
+  }, 8000);
 });
 
 // Tab 切换
@@ -36,18 +35,18 @@ async function loadOverview() {
   const statusText = document.getElementById('headerStatusText');
 
   try {
-    const res = await fetch(`${API_BASE}/panel/api/overview`, { cache: 'no-store' });
+    const res = await fetch('/panel/api/overview', { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    const isOnline = data.healthy > 0 || data.total > 0;
+    const isOnline = (data.healthy > 0 || data.total > 0);
     statusText.textContent = isOnline ? '网关在线' : '等待账号';
     statusPill.style.color = isOnline ? 'var(--primary)' : 'var(--warning)';
     statusPill.style.background = isOnline ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
 
     document.getElementById('statAccounts').textContent = `${data.healthy || 0} / ${data.total || 0}`;
 
-    // 统计所有账号的请求与 Token
+    // 统计所有账号的用量与 Token
     let todayReq = 0;
     let todayTokens = 0;
     (data.accounts || []).forEach(a => {
@@ -59,7 +58,7 @@ async function loadOverview() {
     document.getElementById('statTodayReq').textContent = todayReq.toLocaleString();
     document.getElementById('statTodayTokens').textContent = todayTokens.toLocaleString();
     document.getElementById('statActiveKeys').textContent = data.healthy || 0;
-    document.getElementById('infoCoreUrl').textContent = API_BASE;
+    document.getElementById('infoCoreUrl').textContent = window.location.origin;
   } catch (e) {
     statusText.textContent = '连接中断';
     statusPill.style.color = 'var(--danger)';
@@ -71,7 +70,7 @@ async function loadOverview() {
 async function loadAccounts() {
   const container = document.getElementById('accountList');
   try {
-    const res = await fetch(`${API_BASE}/panel/api/overview`, { cache: 'no-store' });
+    const res = await fetch('/panel/api/overview', { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const accounts = data.accounts || [];
@@ -92,6 +91,7 @@ async function loadAccounts() {
       const statusText = isOnline ? '● 在线' : (a.disabled ? '● 已停用' : '● 冷却中');
       const realmText = a.realm === 'global' ? '国际版' : '国内版';
       const tokensUsed = (a.token_usage && a.token_usage.total_tokens) ? a.token_usage.total_tokens.toLocaleString() : '0';
+      const creditsDisplay = a.credits >= 0 ? `· 积分 ${a.credits}` : '';
 
       return `
         <div class="item-card">
@@ -103,7 +103,7 @@ async function loadAccounts() {
                 <span class="tag tag-global">${realmText}</span>
                 <span class="tag ${statusClass}">${statusText}</span>
               </div>
-              <div class="item-sub">UID: ${escapeHtml(a.uid)} · 已消耗: ${tokensUsed} tokens</div>
+              <div class="item-sub">UID: ${escapeHtml(a.uid)} ${creditsDisplay} · 消耗: ${tokensUsed} tokens</div>
             </div>
           </div>
           <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(a.uid)}')">复制UID</button>
@@ -119,6 +119,8 @@ function openAuthModal() {
   document.getElementById('authModal').classList.add('active');
   document.getElementById('authResultArea').style.display = 'none';
   document.getElementById('startAuthBtn').style.display = 'block';
+  document.getElementById('startAuthBtn').disabled = false;
+  document.getElementById('startAuthBtn').textContent = '获取授权链接';
   if (activePollTimer) {
     clearInterval(activePollTimer);
     activePollTimer = null;
@@ -128,17 +130,21 @@ function openAuthModal() {
 async function requestAuthLink() {
   const btn = document.getElementById('startAuthBtn');
   btn.disabled = true;
-  btn.textContent = '正在获取授权链接...';
+  btn.textContent = '正在向官方申请链接...';
 
   try {
-    const res = await fetch(`${API_BASE}/panel/api/login/start`, {
+    const res = await fetch('/panel/api/login/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ realm: 'global' })
     });
     const data = await res.json();
     if (data.ok && data.url) {
-      document.getElementById('authLinkBtn').href = data.url;
+      const linkBtn = document.getElementById('authLinkBtn');
+      linkBtn.href = data.url;
+      linkBtn.onclick = (e) => {
+        window.open(data.url, '_blank');
+      };
       document.getElementById('authResultArea').style.display = 'block';
       btn.style.display = 'none';
 
@@ -159,53 +165,54 @@ async function requestAuthLink() {
 function startAuthPolling(state) {
   if (activePollTimer) clearInterval(activePollTimer);
   const statusDiv = document.createElement('div');
-  statusDiv.style.cssText = 'font-size: 12px; color: var(--warning); margin-top: 8px; text-align: center;';
-  statusDiv.textContent = '⏳ 等待浏览器授权中，完成后将自动入库...';
+  statusDiv.id = 'pollStatusText';
+  statusDiv.style.cssText = 'font-size: 12px; color: var(--warning); margin-top: 8px; text-align: center; line-height: 1.6;';
+  statusDiv.innerHTML = '⏳ 正在等待浏览器完成登录授权...<br><span style="color:var(--text-dim);font-size:11px;">完成后系统将自动检测并入库，无需刷新</span>';
+  
+  const oldText = document.getElementById('pollStatusText');
+  if (oldText) oldText.remove();
   document.getElementById('authResultArea').appendChild(statusDiv);
 
   activePollTimer = setInterval(async () => {
     try {
-      const res = await fetch(`${API_BASE}/panel/api/login/poll?state=${encodeURIComponent(state)}`);
+      const res = await fetch('/panel/api/login/poll?state=' + encodeURIComponent(state));
       const data = await res.json();
       if (data.done) {
         clearInterval(activePollTimer);
         activePollTimer = null;
         statusDiv.style.color = 'var(--primary)';
-        statusDiv.textContent = '✅ 授权成功！账号已自动加入账号池！';
+        statusDiv.innerHTML = `🎉 <b>授权成功！</b><br>已添加账号 <b>${escapeHtml(data.nickname || data.uid)}</b>，已自动载入池中！`;
         setTimeout(() => {
           closeModal('authModal');
           loadAccounts();
           loadOverview();
-        }, 1500);
+        }, 1800);
       }
     } catch (ignored) {}
   }, 2500);
 }
 
-// 3. 密钥
+// 3. 接入配置
 async function loadKeys() {
   const container = document.getElementById('keyList');
+  const baseOrigin = window.location.origin;
+  document.getElementById('baseUrlDisplay').textContent = `${baseOrigin}/v1`;
+
   container.innerHTML = `
-    <div class="item-card">
-      <div class="item-main">
-        <div class="item-info">
-          <div class="item-title">
-            <span>默认本地密钥 (免鉴权)</span>
-            <span class="tag tag-online">已启用</span>
-          </div>
-          <div class="item-sub">本机免密访问 · 适配任何客户端</div>
-        </div>
+    <div class="card" style="margin-bottom: 12px;">
+      <div class="section-title">本地免鉴权模式已启用</div>
+      <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+        App 运行在手机独立本地沙箱中，为保障第三方客户端极简接入，所有本地请求均免密放行。
+      </p>
+      <div style="font-size: 13px; color: var(--text-main); margin-top: 10px; font-family: var(--font-mono);">
+        API 接口: <span style="color: var(--primary);">${baseOrigin}/v1/chat/completions</span><br>
+        API Key: <span style="color: var(--accent);">任意填写（如 123456）</span>
       </div>
-      <button class="btn btn-outline btn-sm" onclick="copyText('wb_local_key')">复制</button>
     </div>`;
 }
 
-function openNewKeyModal() {
-  alert('本地引擎已开启免密极简模式，可在第三方客户端直接填任意 Key（如 123）即可使用！');
-}
-
 function copyBaseUrl() {
-  copyText(`${API_BASE}/v1`);
+  copyText(`${window.location.origin}/v1`);
 }
 
 // 4. 即时对话工作台 (直接调用本地引擎流式 SSE)
@@ -242,7 +249,7 @@ async function sendMessage() {
   let thinkingContent = '';
 
   try {
-    const response = await fetch(`${API_BASE}/v1/chat/completions`, {
+    const response = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -294,7 +301,7 @@ async function sendMessage() {
         }
       }
 
-      // 实时渲染
+      // 实时渲染思维链与正文
       let html = '';
       if (thinkingContent) {
         html += `<div class="thinking-block">💭 ${escapeHtml(thinkingContent)}</div>`;

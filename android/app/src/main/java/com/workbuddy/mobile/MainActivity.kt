@@ -10,14 +10,12 @@ import android.os.Looper
 import android.view.KeyEvent
 import android.webkit.*
 import androidx.appcompat.app.AppCompatActivity
-import androidx.webkit.WebViewAssetLoader
 import java.net.Socket
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private val handler = Handler(Looper.getMainLooper())
-    private var isUsingNativePanel = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,10 +23,6 @@ class MainActivity : AppCompatActivity() {
 
         // 启动本地原生守护进程
         startService(Intent(this, DaemonService::class.java))
-
-        val assetLoader = WebViewAssetLoader.Builder()
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-            .build()
 
         webView = WebView(this).apply {
             settings.apply {
@@ -51,7 +45,36 @@ class MainActivity : AppCompatActivity() {
                     request: WebResourceRequest?
                 ): WebResourceResponse? {
                     val url = request?.url ?: return null
-                    return assetLoader.shouldInterceptRequest(url)
+                    val host = url.host ?: ""
+                    val path = url.path ?: ""
+
+                    // 将 127.0.0.1:7863/m/* 路由精确拦截为本地 assets/web/* 静态资产
+                    // 从而使前端与 127.0.0.1:7863 底层网关共享同一个 HTTP 域，彻底杜绝跨域与协议阻断
+                    if (host == "127.0.0.1" && (path == "/" || path == "/m" || path.startsWith("/m/"))) {
+                        val assetFile = when {
+                            path == "/" || path == "/m" || path == "/m/" || path == "/m/index.html" -> "web/index.html"
+                            path == "/m/style.css" -> "web/style.css"
+                            path == "/m/app.js" -> "web/app.js"
+                            path == "/m/manifest.json" -> "web/manifest.json"
+                            else -> "web/" + path.removePrefix("/m/").removePrefix("/m")
+                        }
+                        val mime = when {
+                            assetFile.endsWith(".html") -> "text/html"
+                            assetFile.endsWith(".css") -> "text/css"
+                            assetFile.endsWith(".js") -> "application/javascript"
+                            assetFile.endsWith(".json") -> "application/json"
+                            else -> "application/octet-stream"
+                        }
+                        return try {
+                            val stream = assets.open(assetFile)
+                            WebResourceResponse(mime, "utf-8", stream)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+
+                    // 其它路径（如 /panel/api/、/v1/ 等）直接放行给 127.0.0.1:7863 处理
+                    return null
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -71,26 +94,24 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(webView)
 
-        // 等待后台引擎就绪后载入界面
+        // 等待后台引擎就绪后载入同源界面
         waitForEngineAndLoad()
     }
 
     private fun waitForEngineAndLoad() {
         Thread {
-            var ready = false
             for (i in 1..25) {
                 try {
                     val s = Socket("127.0.0.1", 7863)
                     s.close()
-                    ready = true
                     break
                 } catch (e: Exception) {
                     Thread.sleep(200)
                 }
             }
             handler.post {
-                // 使用标准的 HTTPS AppAsset 虚拟域，彻底告别 file:// 限制
-                webView.loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
+                // 加载同源路由，让前端与后端处于完全相同的 HTTP 域中
+                webView.loadUrl("http://127.0.0.1:7863/m/index.html")
             }
         }.start()
     }

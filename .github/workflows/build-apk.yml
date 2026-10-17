@@ -51,19 +51,19 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: mobile-v1.0.1
-          name: "WorkBuddy Mobile v1.0.1 独立安卓版"
+          tag_name: mobile-v1.0.2
+          name: "WorkBuddy Mobile v1.0.2 独立安卓版"
           target_commitish: ${{ github.sha }}
           prerelease: false
           files: dist/WorkBuddyMobile.apk
           body: |
-            ### 📱 WorkBuddy Mobile 独立安卓版 v1.0.1
+            ### 📱 WorkBuddy Mobile 独立安卓版 v1.0.2
 
-            - 🚀 **彻底解决 Failed to fetch**：采用官方标准 HTTPS `WebViewAssetLoader` 虚拟域替代 `file://`，全链路跨域阻断与相对路径问题彻底根除！
-            - ⚡ **本地自洽直通引擎**：移动端直连内置原生守护核心（127.0.0.1:7863），无需密码，免密直达，秒级响应。
-            - 🌍 **国际版全自动授权**：点击「+ 授权新账号」获取授权链接并在浏览器完成登录，App 后台 2.5 秒自愈轮询秒级入库！
-            - 💬 **即时对话工作台**：原生移动端对话界面，支持 DeepSeek V4.1、GLM 等模型实时流式打字机输出与折叠思维链抽屉！
-            - 🛠️ **完整控制台一键切换**：顶部新增「完整后台」快捷切换按钮，随时在极简移动端与高级原生面板间丝滑切换。
+            - 🚀 **100% 同源架构彻底根除 Failed to fetch**：前端精准映射至 `http://127.0.0.1:7863/m/index.html`，与底层 Go 引擎共享完全相同的 HTTP 域，彻底消除任何 CORS、Mixed Content 与 CORP 限制！
+            - ⚡ **本地自洽直通引擎**：免密直连 127.0.0.1:7863，即刻加载账号与概览状态，不再提示连接中断。
+            - 🌍 **国际版一键秒级授权**：点击「+ 授权新账号」自动调用官方 OAuth 设备授权流，跳出浏览器登录后 2.5 秒自愈捕获入库！
+            - 💬 **即时对话工作台**：原生移动端聊天气泡体验，支持 DeepSeek V4.1、GLM 等模型实时流式打字机输出与折叠思维链！
+            - 🛠️ **完整后台快捷入口**：顶部一键切换高级原生控制台。
 
             *点击下方 Assets 里的 `WorkBuddyMobile.apk` 下载平滑覆盖升级！*
         env:
