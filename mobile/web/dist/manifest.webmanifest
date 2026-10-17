@@ -1,0 +1,18 @@
+{
+  "name": "WorkBuddy 移动管理",
+  "short_name": "WorkBuddy",
+  "description": "WorkBuddy 账号池与网关的移动端管理台",
+  "id": "/m/",
+  "start_url": "/m/",
+  "scope": "/m/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B0F17",
+  "theme_color": "#0B0F17",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/m/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/m/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/m/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

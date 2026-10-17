@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+/* 设计令牌：深色为主（Slate Night），浅色跟随系统。所有文字对比度 ≥ WCAG AA。 */
+:root {
+  --bg: #0B0F17;
+  --surface: #121A2B;
+  --card: #18223A;
+  --card-2: #1F2B47;
+  --line: #2A3754;
+  --text: #F5F7FB;
+  --text-2: #C3CDDD;
+  --text-3: #8F9BB3;
+  --primary: #7AB4FF;
+  --on-primary: #0B0F17;
+  --primary-soft: #16294A;
+  --ok: #34D399;
+  --ok-soft: #0E3328;
+  --warn: #FBBF24;
+  --warn-soft: #3A2C0C;
+  --bad: #F87171;
+  --bad-soft: #3D1717;
+  --glass: rgba(18, 26, 43, 0.72);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #F3F5F9;
+    --surface: #FFFFFF;
+    --card: #FFFFFF;
+    --card-2: #EEF2F8;
+    --line: #DCE3EE;
+    --text: #0E1525;
+    --text-2: #3D4A60;
+    --text-3: #5E6B82;
+    --primary: #1F5FD1;
+    --on-primary: #FFFFFF;
+    --primary-soft: #E3EDFF;
+    --ok: #0B7A55;
+    --ok-soft: #DDF5EA;
+    --warn: #8A5A00;
+    --warn-soft: #FCF0D4;
+    --bad: #C02626;
+    --bad-soft: #FCE4E4;
+    --glass: rgba(255, 255, 255, 0.78);
+    color-scheme: light;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-card-2: var(--card-2);
+  --color-line: var(--line);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-primary-soft: var(--primary-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC",
+    "MiSans", "Noto Sans SC", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+button { -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 12px; }
+
+.pt-safe { padding-top: max(env(safe-area-inset-top), 12px); }
+.pb-tabbar { padding-bottom: calc(env(safe-area-inset-bottom) + 104px); }
+.bottom-safe { bottom: calc(env(safe-area-inset-bottom) + 12px); }
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+
+.press { transition: transform .12s ease, opacity .12s ease; }
+.press:active { transform: scale(.97); opacity: .85; }
+
+@keyframes rise { from { transform: translateY(12px); opacity: 0 } to { transform: none; opacity: 1 } }
+@keyframes sheet { from { transform: translateY(100%) } to { transform: none } }
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes shimmer { 0% { background-position: -200px 0 } 100% { background-position: 200px 0 } }
+@keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+.anim-rise { animation: rise .28s cubic-bezier(.2,.8,.2,1) both; }
+.anim-sheet { animation: sheet .32s cubic-bezier(.2,.8,.2,1) both; }
+.anim-fade { animation: fade .2s ease both; }
+.dot-live { animation: pulse-dot 1.6s ease-in-out infinite; }
+.skeleton {
+  background: linear-gradient(90deg, var(--card) 0px, var(--card-2) 80px, var(--card) 160px);
+  background-size: 400px 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* 聊天 Markdown */
+.md { line-height: 1.6; word-break: break-word; }
+.md p { margin: .35em 0; }
+.md ul, .md ol { padding-left: 1.2em; margin: .35em 0; }
+.md ul { list-style: disc; } .md ol { list-style: decimal; }
+.md code { font-family: var(--font-mono); font-size: .88em; background: var(--card-2); padding: .1em .35em; border-radius: 6px; }
+.md pre { background: var(--bg); border: 1px solid var(--line); padding: 10px 12px; border-radius: 12px; overflow-x: auto; margin: .5em 0; }
+.md pre code { background: none; padding: 0; }
+.md a { color: var(--primary); text-decoration: underline; }
+.md h1, .md h2, .md h3 { font-weight: 700; margin: .6em 0 .3em; }
+.md blockquote { border-left: 3px solid var(--line); padding-left: .7em; color: var(--text-2); }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md td, .md th { border: 1px solid var(--line); padding: 4px 8px; }

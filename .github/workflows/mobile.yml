@@ -1,0 +1,40 @@
+name: mobile
+
+on:
+  push:
+    paths: ['mobile/**', '.github/workflows/mobile.yml']
+  pull_request:
+    paths: ['mobile/**', '.github/workflows/mobile.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  bff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install -r mobile/requirements-dev.txt
+      - name: 解耦检查（mobile/ 不得导入 core 的 server 包）
+        run: "! grep -rEn '^\\s*(from|import)\\s+server(\\.|\\s|$)' mobile --include=*.py"
+      - run: python -m pytest mobile/tests -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: mobile/web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: mobile/web/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc -p .
+      - run: npm run build
+      - name: 体积预算（首屏 JS ≤ 60KB gzip）
+        run: |
+          total=0
+          for f in dist/assets/*.js; do s=$(gzip -c "$f" | wc -c); total=$((total+s)); done
+          echo "JS gzip total: $total bytes"; test "$total" -le 61440
+      - name: 提交的 dist 与源码一致
+        run: git diff --stat --exit-code -- dist || (echo '::error::mobile/web/dist 未随源码重新构建，请执行 npm run build 后一并提交' && exit 1)
