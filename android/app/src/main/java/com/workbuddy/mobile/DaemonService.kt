@@ -78,8 +78,8 @@ class DaemonService : Service() {
                 val exeFile = File(binDir, "wb2api")
                 val configFile = File(filesDir, "config.json")
 
-                // 解压二进制
-                if (!exeFile.exists() || exeFile.length() == 0L) {
+                // 复制解压原生二进制
+                if (!exeFile.exists() || exeFile.length() < 1000000L) {
                     assets.open("bin/wb2api").use { input ->
                         FileOutputStream(exeFile).use { output ->
                             input.copyTo(output)
@@ -88,23 +88,21 @@ class DaemonService : Service() {
                     exeFile.setExecutable(true, false)
                 }
 
-                // 写入配置
-                if (!configFile.exists()) {
-                    val configJson = """
-                    {
-                      "listen": "127.0.0.1:7863",
-                      "api_key": "wb_local_internal_key",
-                      "auth_dir": "${authsDir.absolutePath}",
-                      "state_file": "${dataDir.absolutePath}/state.json",
-                      "admin": { "enabled": true },
-                      "global": { "enabled": true, "chat_base": "https://www.workbuddy.ai", "billing_base": "https://www.workbuddy.ai" },
-                      "cooldown": { "soft_rate": "600s", "soft_rate_max": "2h" },
-                      "schedule": { "checkin_hours": [9, 21], "checkin_enabled": true, "travel_enabled": false },
-                      "pool": { "max_in_flight": 3, "max_in_flight_global": 2 }
-                    }
-                    """.trimIndent()
-                    configFile.writeText(configJson)
+                // 固化免密配置
+                val configJson = """
+                {
+                  "listen": "127.0.0.1:7863",
+                  "api_key": "",
+                  "auth_dir": "${authsDir.absolutePath}",
+                  "state_file": "${dataDir.absolutePath}/state.json",
+                  "admin": { "enabled": true },
+                  "global": { "enabled": true, "chat_base": "https://www.workbuddy.ai", "billing_base": "https://www.workbuddy.ai" },
+                  "cooldown": { "soft_rate": "600s", "soft_rate_max": "2h" },
+                  "schedule": { "checkin_hours": [9, 21], "checkin_enabled": true, "travel_enabled": false },
+                  "pool": { "max_in_flight": 3, "max_in_flight_global": 2 }
                 }
+                """.trimIndent()
+                configFile.writeText(configJson)
 
                 // 启动引擎
                 val pb = ProcessBuilder(exeFile.absolutePath, "-config", configFile.absolutePath)

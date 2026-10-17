@@ -1,7 +1,8 @@
-// WorkBuddy Mobile 交互逻辑
+// WorkBuddy Mobile 交互逻辑 - 直连本地自洽 Go 引擎 (127.0.0.1:7863)
 
+const API_BASE = 'http://127.0.0.1:7863';
 let currentTab = 'overview';
-let generatedKey = '';
+let activePollTimer = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadOverview();
@@ -9,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.visibilityState === 'visible' && currentTab === 'overview') {
       loadOverview();
     }
-  }, 15000);
+  }, 10000);
 });
 
 // Tab 切换
@@ -31,25 +32,38 @@ function switchTab(tab) {
 
 // 1. 概览
 async function loadOverview() {
-  const statusDot = document.getElementById('headerStatusText');
+  const statusPill = document.getElementById('headerStatus');
+  const statusText = document.getElementById('headerStatusText');
+
   try {
-    const res = await fetch('/m/api/overview');
-    if (!res.ok) throw new Error('网络异常');
+    const res = await fetch(`${API_BASE}/panel/api/overview`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    const isOnline = data.status === 'online';
-    statusDot.textContent = isOnline ? '网关在线' : '网关离线';
-    document.getElementById('headerStatus').style.color = isOnline ? 'var(--primary)' : 'var(--danger)';
-    document.getElementById('headerStatus').style.background = isOnline ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+    const isOnline = data.healthy > 0 || data.total > 0;
+    statusText.textContent = isOnline ? '网关在线' : '等待账号';
+    statusPill.style.color = isOnline ? 'var(--primary)' : 'var(--warning)';
+    statusPill.style.background = isOnline ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
 
-    document.getElementById('statAccounts').textContent = `${data.accounts.active} / ${data.accounts.total}`;
-    document.getElementById('statTodayReq').textContent = data.stats.today_requests.toLocaleString();
-    document.getElementById('statTodayTokens').textContent = data.stats.today_tokens.toLocaleString();
-    document.getElementById('statActiveKeys').textContent = data.stats.active_keys;
-    document.getElementById('infoCoreUrl').textContent = data.core_url;
+    document.getElementById('statAccounts').textContent = `${data.healthy || 0} / ${data.total || 0}`;
+
+    // 统计所有账号的请求与 Token
+    let todayReq = 0;
+    let todayTokens = 0;
+    (data.accounts || []).forEach(a => {
+      const u = a.token_usage || {};
+      todayReq += (u.request_count || 0);
+      todayTokens += (u.total_tokens || 0);
+    });
+
+    document.getElementById('statTodayReq').textContent = todayReq.toLocaleString();
+    document.getElementById('statTodayTokens').textContent = todayTokens.toLocaleString();
+    document.getElementById('statActiveKeys').textContent = data.healthy || 0;
+    document.getElementById('infoCoreUrl').textContent = API_BASE;
   } catch (e) {
-    statusDot.textContent = '连接中断';
-    document.getElementById('headerStatus').style.color = 'var(--danger)';
+    statusText.textContent = '连接中断';
+    statusPill.style.color = 'var(--danger)';
+    statusPill.style.background = 'rgba(239, 68, 68, 0.15)';
   }
 }
 
@@ -57,7 +71,8 @@ async function loadOverview() {
 async function loadAccounts() {
   const container = document.getElementById('accountList');
   try {
-    const res = await fetch('/m/api/accounts');
+    const res = await fetch(`${API_BASE}/panel/api/overview`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const accounts = data.accounts || [];
     document.getElementById('accountCount').textContent = accounts.length;
@@ -72,10 +87,11 @@ async function loadAccounts() {
 
     container.innerHTML = accounts.map(a => {
       const initial = (a.nickname || 'U').charAt(0).toUpperCase();
-      const isOnline = a.in_pool && !a.disabled && !a.cooling;
+      const isOnline = !a.disabled && !a.cooling;
       const statusClass = isOnline ? 'tag-online' : 'tag-offline';
       const statusText = isOnline ? '● 在线' : (a.disabled ? '● 已停用' : '● 冷却中');
       const realmText = a.realm === 'global' ? '国际版' : '国内版';
+      const tokensUsed = (a.token_usage && a.token_usage.total_tokens) ? a.token_usage.total_tokens.toLocaleString() : '0';
 
       return `
         <div class="item-card">
@@ -87,7 +103,7 @@ async function loadAccounts() {
                 <span class="tag tag-global">${realmText}</span>
                 <span class="tag ${statusClass}">${statusText}</span>
               </div>
-              <div class="item-sub">UID: ${escapeHtml(a.uid)} · 有效期约 ${a.remain_days} 天</div>
+              <div class="item-sub">UID: ${escapeHtml(a.uid)} · 已消耗: ${tokensUsed} tokens</div>
             </div>
           </div>
           <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(a.uid)}')">复制UID</button>
@@ -103,127 +119,96 @@ function openAuthModal() {
   document.getElementById('authModal').classList.add('active');
   document.getElementById('authResultArea').style.display = 'none';
   document.getElementById('startAuthBtn').style.display = 'block';
+  if (activePollTimer) {
+    clearInterval(activePollTimer);
+    activePollTimer = null;
+  }
 }
 
 async function requestAuthLink() {
-  const region = document.getElementById('authRegion').value;
   const btn = document.getElementById('startAuthBtn');
   btn.disabled = true;
-  btn.textContent = '正在获取链接...';
+  btn.textContent = '正在获取授权链接...';
 
   try {
-    const res = await fetch('/m/api/auth/start', {
+    const res = await fetch(`${API_BASE}/panel/api/login/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ realm: 'global', region })
+      body: JSON.stringify({ realm: 'global' })
     });
     const data = await res.json();
-    if (data.authUrl) {
-      document.getElementById('authLinkBtn').href = data.authUrl;
+    if (data.ok && data.url) {
+      document.getElementById('authLinkBtn').href = data.url;
       document.getElementById('authResultArea').style.display = 'block';
       btn.style.display = 'none';
+
+      // 启动自动轮询
+      startAuthPolling(data.state);
     } else {
-      alert('获取授权链接失败：' + (data.detail || JSON.stringify(data)));
+      alert('获取授权链接失败：' + (data.error || JSON.stringify(data)));
+      btn.disabled = false;
+      btn.textContent = '获取授权链接';
     }
   } catch (e) {
     alert('请求失败：' + e.message);
-  } finally {
     btn.disabled = false;
     btn.textContent = '获取授权链接';
   }
 }
 
+function startAuthPolling(state) {
+  if (activePollTimer) clearInterval(activePollTimer);
+  const statusDiv = document.createElement('div');
+  statusDiv.style.cssText = 'font-size: 12px; color: var(--warning); margin-top: 8px; text-align: center;';
+  statusDiv.textContent = '⏳ 等待浏览器授权中，完成后将自动入库...';
+  document.getElementById('authResultArea').appendChild(statusDiv);
+
+  activePollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/panel/api/login/poll?state=${encodeURIComponent(state)}`);
+      const data = await res.json();
+      if (data.done) {
+        clearInterval(activePollTimer);
+        activePollTimer = null;
+        statusDiv.style.color = 'var(--primary)';
+        statusDiv.textContent = '✅ 授权成功！账号已自动加入账号池！';
+        setTimeout(() => {
+          closeModal('authModal');
+          loadAccounts();
+          loadOverview();
+        }, 1500);
+      }
+    } catch (ignored) {}
+  }, 2500);
+}
+
 // 3. 密钥
 async function loadKeys() {
   const container = document.getElementById('keyList');
-  try {
-    const res = await fetch('/m/api/keys');
-    const data = await res.json();
-    const keys = Array.isArray(data) ? data : (data.items || []);
-
-    if (keys.length === 0) {
-      container.innerHTML = `
-        <div style="text-align: center; padding: 40px; color: var(--text-dim);">
-          暂无密钥，点击上方「+ 创建密钥」生成一个
-        </div>`;
-      return;
-    }
-
-    container.innerHTML = keys.map(k => `
-      <div class="item-card">
-        <div class="item-main">
-          <div class="item-info">
-            <div class="item-title">
-              <span>${escapeHtml(k.name || '未命名')}</span>
-              <span class="tag tag-online">${k.enabled ? '已启用' : '已停用'}</span>
-            </div>
-            <div class="item-sub">前缀: ${escapeHtml(k.prefix || 'wbk_***')} · 用量: ${k.used_tokens || 0} tokens</div>
+  container.innerHTML = `
+    <div class="item-card">
+      <div class="item-main">
+        <div class="item-info">
+          <div class="item-title">
+            <span>默认本地密钥 (免鉴权)</span>
+            <span class="tag tag-online">已启用</span>
           </div>
+          <div class="item-sub">本机免密访问 · 适配任何客户端</div>
         </div>
-        <div style="display: flex; gap: 6px;">
-          <button class="btn btn-outline btn-sm" onclick="copyText('${escapeHtml(k.prefix)}')">复制</button>
-          <button class="btn btn-outline btn-sm" style="color: var(--danger);" onclick="deleteKey(${k.id})">删除</button>
-        </div>
-      </div>`).join('');
-  } catch (e) {
-    container.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--danger);">加载密钥失败: ${e.message}</div>`;
-  }
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="copyText('wb_local_key')">复制</button>
+    </div>`;
 }
 
 function openNewKeyModal() {
-  document.getElementById('newKeyModal').classList.add('active');
-  document.getElementById('newKeyName').value = 'Mobile-Key';
-  document.getElementById('newKeyResult').style.display = 'none';
-  document.getElementById('createKeyBtn').style.display = 'block';
-}
-
-async function submitCreateKey() {
-  const name = document.getElementById('newKeyName').value.trim();
-  const btn = document.getElementById('createKeyBtn');
-  btn.disabled = true;
-
-  try {
-    const res = await fetch('/m/api/keys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    const data = await res.json();
-    if (data.key) {
-      generatedKey = data.key;
-      document.getElementById('newKeyText').textContent = data.key;
-      document.getElementById('newKeyResult').style.display = 'block';
-      btn.style.display = 'none';
-      loadKeys();
-    } else {
-      alert('创建失败：' + JSON.stringify(data));
-    }
-  } catch (e) {
-    alert('请求失败：' + e.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function deleteKey(id) {
-  if (!confirm('确认删除该密钥吗？')) return;
-  try {
-    await fetch(`/m/api/keys/${id}`, { method: 'DELETE' });
-    loadKeys();
-  } catch (e) {
-    alert('删除失败: ' + e.message);
-  }
-}
-
-function copyGeneratedKey() {
-  if (generatedKey) copyText(generatedKey);
+  alert('本地引擎已开启免密极简模式，可在第三方客户端直接填任意 Key（如 123）即可使用！');
 }
 
 function copyBaseUrl() {
-  copyText('http://127.0.0.1:8795/v1');
+  copyText(`${API_BASE}/v1`);
 }
 
-// 4. 即时对话工作台 (SSE 流式)
+// 4. 即时对话工作台 (直接调用本地引擎流式 SSE)
 let chatHistory = [];
 
 async function sendMessage() {
@@ -257,14 +242,22 @@ async function sendMessage() {
   let thinkingContent = '';
 
   try {
-    const response = await fetch('/m/api/chat', {
+    const response = await fetch(`${API_BASE}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         model: model,
-        messages: chatHistory
+        messages: chatHistory,
+        stream: true
       })
     });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errText}`);
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
@@ -287,7 +280,7 @@ async function sendMessage() {
           try {
             const parsed = JSON.parse(trimmed.slice(6));
             if (parsed.error) {
-              assistantContent += `\n[错误: ${parsed.error}]`;
+              assistantContent += `\n[错误: ${parsed.error.message || JSON.stringify(parsed.error)}]`;
             } else if (parsed.choices && parsed.choices[0]) {
               const delta = parsed.choices[0].delta || {};
               if (delta.reasoning_content) {
@@ -322,6 +315,10 @@ async function sendMessage() {
 // 通用工具
 function closeModal(id) {
   document.getElementById(id).classList.remove('active');
+  if (activePollTimer) {
+    clearInterval(activePollTimer);
+    activePollTimer = null;
+  }
 }
 
 function copyText(str) {

@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>WorkBuddy Mobile</title>
   <link rel="stylesheet" href="style.css" />
-  <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#0b0f17" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 </head>
 <body>
 
@@ -20,9 +17,12 @@
         <div class="brand-title">WorkBuddy <span class="brand-badge">Mobile</span></div>
       </div>
     </div>
-    <div class="status-pill" id="headerStatus">
-      <span class="status-dot"></span>
-      <span id="headerStatusText">连接中...</span>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <button class="btn btn-outline btn-sm" onclick="window.location.href='http://127.0.0.1:7863/panel/'" style="font-size: 11px; padding: 2px 8px; min-height: 28px;">完整后台</button>
+      <div class="status-pill" id="headerStatus">
+        <span class="status-dot"></span>
+        <span id="headerStatusText">连接中...</span>
+      </div>
     </div>
   </header>
 
@@ -42,7 +42,7 @@
         <div class="metric-value" id="statTodayTokens">0</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">活跃密钥</div>
+        <div class="metric-label">活跃服务</div>
         <div class="metric-value" id="statActiveKeys">0</div>
       </div>
     </div>
@@ -53,14 +53,14 @@
         <button class="btn btn-outline btn-sm" onclick="loadOverview()">刷新</button>
       </div>
       <div style="font-size: 13px; color: var(--text-muted); line-height: 1.8;">
-        <div>📡 核心网关：<span id="infoCoreUrl" style="font-family: var(--font-mono); color: var(--text-main);">http://127.0.0.1:8795</span></div>
-        <div>🚀 国际版通道：<span style="color: var(--primary); font-weight: 600;">已就绪 (Global / workbuddy.ai)</span></div>
+        <div>📡 本地引擎：<span id="infoCoreUrl" style="font-family: var(--font-mono); color: var(--text-main);">http://127.0.0.1:7863</span></div>
+        <div>🚀 国际版支持：<span style="color: var(--primary); font-weight: 600;">已就绪 (Global / workbuddy.ai)</span></div>
         <div>🔐 API 接口：<span style="font-family: var(--font-mono); color: var(--accent);">/v1/chat/completions</span></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="section-title">快捷指引</div>
+      <div class="section-title">快捷操作</div>
       <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
         移动端已全面精简国内碎包积分噪点，专注于纯净的账号纳管与大模型 API 转发。
       </p>
@@ -85,20 +85,19 @@
   <!-- 3. 密钥 Tab -->
   <main id="view-keys" class="tab-content">
     <div class="section-title">
-      <span>API 密钥</span>
-      <button class="btn btn-primary btn-sm" onclick="openNewKeyModal()">+ 创建密钥</button>
+      <span>API 接入</span>
     </div>
 
     <div class="card" style="background: rgba(56, 189, 248, 0.05); border-color: rgba(56, 189, 248, 0.2); margin-bottom: 16px;">
       <div style="font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 4px;">第三方客户端配置地址 (Base URL)</div>
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-        <span id="baseUrlDisplay" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-main);">http://127.0.0.1:8795/v1</span>
+        <span id="baseUrlDisplay" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-main);">http://127.0.0.1:7863/v1</span>
         <button class="btn btn-outline btn-sm" onclick="copyBaseUrl()">复制</button>
       </div>
     </div>
 
     <div id="keyList">
-      <div style="text-align: center; padding: 40px; color: var(--text-dim);">加载密钥中...</div>
+      <div style="text-align: center; padding: 40px; color: var(--text-dim);">加载中...</div>
     </div>
   </main>
 
@@ -118,7 +117,7 @@
 
       <div class="chat-messages" id="chatMessages">
         <div class="chat-bubble assistant">
-          您好！已连接至 WorkBuddy Mobile 网关。输入消息即可直接验证模型输出与思维链。
+          您好！已连接至 WorkBuddy Mobile 本地引擎。输入消息即可直接验证模型输出与思维链。
         </div>
       </div>
 
@@ -141,7 +140,7 @@
     </div>
     <div class="nav-item" data-tab="keys" onclick="switchTab('keys')">
       <div class="nav-icon">🔑</div>
-      <div>密钥</div>
+      <div>接入</div>
     </div>
     <div class="nav-item" data-tab="chat" onclick="switchTab('chat')">
       <div class="nav-icon">💬</div>
@@ -155,16 +154,8 @@
       <div class="sheet-handle"></div>
       <div class="section-title">授权添加账号</div>
       <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
-        国际版一键授权：系统将生成官方授权链接，点击后在浏览器完成登录即可全自动入库。
+        国际版一键授权：系统将生成官方授权链接，点击后在手机浏览器中确认登录，App 将自动完成入库。
       </p>
-
-      <label style="font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 6px;">选择地区 (国际版)</label>
-      <select id="authRegion" class="input-field">
-        <option value="HK">中国香港 (HK)</option>
-        <option value="SG">新加坡 (SG)</option>
-        <option value="MO">中国澳门 (MO)</option>
-        <option value="TH">泰国 (TH)</option>
-      </select>
 
       <div id="authResultArea" style="display: none; margin-bottom: 14px;">
         <div style="font-size: 12px; color: var(--accent); margin-bottom: 6px;">官方授权链接已就绪：</div>
@@ -174,28 +165,6 @@
       <div style="display: flex; gap: 8px;">
         <button class="btn btn-primary" style="flex: 1;" id="startAuthBtn" onclick="requestAuthLink()">获取授权链接</button>
         <button class="btn btn-outline" style="flex: 1;" onclick="closeModal('authModal')">取消</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 创建密钥弹窗 -->
-  <div class="modal-overlay" id="newKeyModal">
-    <div class="modal-sheet">
-      <div class="sheet-handle"></div>
-      <div class="section-title">创建新 API Key</div>
-
-      <label style="font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 6px;">密钥备注名称</label>
-      <input type="text" id="newKeyName" class="input-field" placeholder="例如：My-NextChat" />
-
-      <div id="newKeyResult" style="display: none; margin-bottom: 14px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 12px; border-radius: var(--radius-sm);">
-        <div style="font-size: 12px; color: var(--primary); font-weight: 600; margin-bottom: 4px;">密钥生成成功（仅展示一次）：</div>
-        <div id="newKeyText" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-main); word-break: break-all; margin-bottom: 8px;"></div>
-        <button class="btn btn-primary btn-sm" onclick="copyGeneratedKey()">复制密钥</button>
-      </div>
-
-      <div style="display: flex; gap: 8px;">
-        <button class="btn btn-primary" style="flex: 1;" id="createKeyBtn" onclick="submitCreateKey()">确认生成</button>
-        <button class="btn btn-outline" style="flex: 1;" onclick="closeModal('newKeyModal')">关闭</button>
       </div>
     </div>
   </div>
